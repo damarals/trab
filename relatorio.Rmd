@@ -1,0 +1,127 @@
+---
+title: "Dataset de Imagens"
+author: "Daniel Amaral"
+date: "08/09/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, 
+                      error = FALSE, message = FALSE)
+```
+
+## Ler Imagem
+
+Lendo com `magick`, por causa da compatibilidade com a extensão `.pgm`, e depois convertendo para o formato CImg, que é mais fácil de manipular, com o pacote `imager`.
+
+```{r}
+read_image <- function(path) {
+  img <- magick::image_read(path)
+  img <- imager::magick2cimg(img)
+  return(img)
+}
+
+img <- read_image('../an2i/an2i_left_angry_open.pgm')
+plot(img)
+```
+
+## Matriz para Vetor
+
+A ideia aqui é pegar a matriz de intensidades da imagem e converter em um vetor unidimensional. Como o `as.vector` transforma a imagem para vetor coluna por coluna, coloquei como input a matriz transposta, uma gambiarra pra ele concatenar linha por linha.
+
+```{r}
+flatten <- function(img) {
+  return(matrix(t(as.matrix(img)), nrow = 1))
+}
+```
+
+Exemplo básico:
+
+```{r}
+mat_example <- matrix(1:9, 3, 3, byrow = T)
+mat_example
+```
+
+convertendo para vetor
+
+```{r}
+mat_example_fl <- flatten(mat_example)
+mat_example_fl
+```
+
+O mesmo processo é possivel com a imagem:
+
+```{r}
+img_matrix <- as.matrix(img) # Matriz de intensidades
+img_flatten <- flatten(img_matrix)
+dim(img_flatten) # Vetor 1D
+```
+
+# Leitura de todas as imagens
+
+extrair a pasta `faces` do arquivo e acessar pelo R:
+
+```{r}
+paths <- fs::dir_ls(path = '../../faces', 
+                    glob = '*.pgm', recurse = TRUE)
+head(paths)
+```
+
+## Criando o dataset (sem nada de imagens ainda...)
+
+O dataset abaixo tem todas as informações da imagem, no entanto, não dá pra colocar os vetores das imagens ainda pq tem diferentes tipos de escala.
+
+```{r}
+da_faces <- paths |> 
+  # cria o dataframe com os paths
+  tibble::tibble() |>
+  # só o nome do arquivo
+  dplyr::mutate(paths_aux = stringr::str_remove_all(paths, '.*/')) |> 
+  # o separate aqui separa a string em cada "_"
+  tidyr::separate(col = paths_aux, 
+                  into = c('user_id', 'head_pos', 
+                           'facial_exp', 'eye_state', 'scale'),
+                  sep = "_") |> 
+  # corrigindo a variável eye_state e scale 
+  dplyr::mutate(eye_state = stringr::str_remove(eye_state, '.pgm'),
+                scale = stringr::str_remove(scale, '.pgm'),
+                scale = as.integer(scale),
+                scale = ifelse(is.na(scale), 1, scale))
+```
+
+Aqui é mais complicadinho... Basicamente, **filtrando por um certo tipo de escala**, vou criar uma pipeline para percorrer o dataset acima, ler cada imagem (função que criei `read_image`) e concatenar o resultado (imagem como vetor).
+
+obs: demora um pouquinho... 30 sec - 1 min...
+
+```{r}
+da_faces_flatten <- da_faces |> 
+  dplyr::filter(scale == 1) |> # filtrando pela resolução full
+  # extração da variável de paths
+  dplyr::pull(paths) |> 
+  # percorrendo cada img, lendo, vetorizando e rbind
+  purrr::map_dfr(function(path) {
+    img <- read_image(path)
+    img_vec <- flatten(img)
+    return(as.data.frame(img_vec))
+  }, .id = 'paths') |> 
+  # concatenando com as informações do da_faces
+  dplyr::inner_join(da_faces, by = c("paths" = "paths")) |> 
+  # convertendo pra tibble, facilitar a manipulação
+  tibble::as_tibble() |> 
+  # deixando bonitinho a organização das variáveis
+  dplyr::relocate(c('user_id', 'head_pos', 'facial_exp', 
+                    'eye_state', 'scale'), .before = V1)
+```
+Bom, agora o dataset ta prontinho pra trabalhar... 
+
+```{r}
+head(da_faces_flatten)
+```
+
+Com as seguintes dimensões:
+
+```{r}
+dim(da_faces_flatten)
+```
+
+5 variáveis (removendo o paths, senão é 6) de informações gerais da imagem + as variáveis de intensidades dos pixels (imagem vetorizada).
